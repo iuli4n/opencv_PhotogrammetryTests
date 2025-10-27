@@ -26,6 +26,12 @@
     <Text Include="main_old.cpp.txt">
       <Filter>Source Files</Filter>
     </Text>
+    <Text Include="main_oldJournalWorking_Oct25.cpp.txt">
+      <Filter>Source Files</Filter>
+    </Text>
+    <Text Include="main_cleanedV1.cpp.txt">
+      <Filter>Source Files</Filter>
+    </Text>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="main.h">

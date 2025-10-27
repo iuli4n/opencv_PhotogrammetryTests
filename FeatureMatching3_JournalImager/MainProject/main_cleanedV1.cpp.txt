@@ -1,0 +1,407 @@
+
+
+
+//#include "stdafx.h"
+
+
+#include <opencv2/core.hpp>
+#include <opencv2/videoio.hpp>
+#include <opencv2/highgui.hpp>
+#include <iostream>
+#include <stdio.h>
+
+#include <opencv2/opencv.hpp>
+
+#include <iostream>
+#include <string>
+#include <fstream>
+#include <chrono>
+
+using namespace cv;
+using namespace std;
+
+#include "misc.hpp"
+#include "main.h"
+
+
+// draw the 3d cube in camera space
+void drawCube(vector<Point2f> projectedPoints, Mat img) {
+	// base
+	for (int i = 0; i < 3; i++) {
+		cv::line(img, projectedPoints[i], projectedPoints[i + 1], Scalar(0, 0, 255), 3);
+	}
+	cv::line(img, projectedPoints[3], projectedPoints[0], Scalar(0, 0, 255), 3);
+	
+	// top
+	for (int i = 0; i < 3; i++) {
+		cv::line(img, projectedPoints[4 + i], projectedPoints[4 + i + 1], Scalar(250, 0, 255), 3);
+	}
+	cv::line(img, projectedPoints[4+3], projectedPoints[4 + 0 ], Scalar(250, 0, 255), 3);
+
+	// columns
+	for (int i = 0; i < 4; i++) {
+		cv::line(img, projectedPoints[i], projectedPoints[4 + i + 0], Scalar(0, 250, 255), 3);
+	}
+
+}
+
+// filter the feature matches by choosing only the best ones based on good distance < threshold
+std::vector<DMatch> filterFeatureMatches(std::vector< std::vector<DMatch> >& knn_matches, float thresh = 0.7f) {
+	// Returns only matches below the threshold
+
+	std::vector<DMatch> good_matches;
+	for (size_t i = 0; i < knn_matches.size(); i++)
+	{
+		if (knn_matches[i][0].distance < thresh * knn_matches[i][1].distance)
+		{
+			good_matches.push_back(knn_matches[i][0]);
+		}
+	}
+	return good_matches;
+}
+
+
+// draw the training area rectangle
+void train_drawArea(Mat frame, Rect trainingArea, Scalar color) {
+	
+	cv::rectangle(frame, trainingArea, color);
+}
+
+long getTimeMS() {
+	using namespace std::chrono;
+	milliseconds ms = duration_cast<milliseconds>(
+		system_clock::now().time_since_epoch()
+		);
+	return ms.count();
+}
+
+// Given a new image frame, detects SIFT features on the image
+void processNewTrainingImage(Mat img1, Ptr<SIFT>& siftdetector, std::vector<cv::KeyPoint>& keypoints1, Mat& descriptors1) {
+	keypoints1.clear();
+	siftdetector->detectAndCompute(img1, noArray(), keypoints1, descriptors1);
+	
+}
+
+int main(int, char**)
+{
+
+	// LOAD CAMERA CONFIGURATION FROM FILE
+
+	FileStorage fs("..\\..\\_RawImages\\camera.yml", FileStorage::READ);
+	cv::Mat cam_cameramatrix; 
+	fs["camera_matrix"] >> cam_cameramatrix;
+	cv::Mat cam_distortioncoefficients;
+	fs["distortion_coefficients"] >> cam_distortioncoefficients;
+
+	//cout << cam_cameramatrix;
+	fs.release();
+
+	
+	VideoCapture cap("..\\videos\\journaltest1.mp4");
+	
+	if (!cap.isOpened()) {
+		cerr << "ERROR! Unable to open video file\n";
+		return -1;
+	}
+
+	// SECTION HOLDING ALL THE VARIABLES
+
+	// GUI flags
+	bool gui_showTrainingArea = true; // show training area (enable with 1) 
+	bool gui_showAllCamFeatures = false; // show all features tracked on the camera (enable with 2)
+	bool gui_showMatchedFeatures = false; // show all the matched features (enable with 3)
+
+	// Image of the live camera frame
+	Mat img_liveframe;
+	
+	// Features will be detected using this
+	Ptr<SIFT> siftdetector = SIFT::create();
+
+	// these will hold the TRAINING IMAGE features keypoints and their descriptors
+	std::vector<cv::KeyPoint> fkeypoints_train;
+	cv::Mat fdescriptors_train;
+
+	// these will hold the LIVE CAMERA IMAGE features keypoints and their descriptors
+	std::vector<cv::KeyPoint> fkeypoints_cam;
+	cv::Mat fdescriptors_cam;
+
+
+	// Matching between the two image sets of features will be done using this
+	Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::FLANNBASED);
+	std::vector< std::vector<DMatch> > knn_matches;
+	std::vector<DMatch> topMatches;
+
+
+	
+	
+
+
+
+	// area of the camera image used for training the new dataset
+	Rect trainingArea;
+	{
+		int pad = 50, width = 700, height = 600;
+		int x1 = pad, x2 = pad + width;
+		int y1 = pad, y2 = pad + height;
+		trainingArea = Rect(x1, y1, x2, y2);
+	}
+
+
+	// whether we have any training data
+	bool haveTrained = false;
+	cv::Mat img_training;
+
+
+
+
+	int imagesSaved = 0;
+
+
+
+	// MAIN LOOP
+
+	long startTime = getTimeMS();
+	int lastNumMatchedFeatures = 0;
+
+	cout << "Starting grabbing frames" << endl
+		<< "Press any key to terminate" << endl;
+
+
+	// for simulating time based on keyboard controls
+	bool usingKeyboardTime = true;
+	long keyboardTime = 0;
+	long lastProcessedTime = -1; // time of the last frame that was actually processed
+
+	for (;;)
+	{
+		// GET NEW IMAGE FROM VIDEO
+		// store it in img_liveframe
+		{
+			if (!usingKeyboardTime) {
+				keyboardTime = getTimeMS() - startTime;
+			}
+			float SPEEDSCALE = 0.5;
+			long msecsNow = SPEEDSCALE * (keyboardTime);
+			cout << "Video time: " << msecsNow << endl;
+			//cout << secsNow/1000.0f << endl;
+			cap.set(cv::CAP_PROP_POS_MSEC, msecsNow);
+			cap.read(img_liveframe);
+			// check if we succeeded
+			if (img_liveframe.empty()) {
+				cerr << "ERROR! blank frame grabbed\n";
+				break;
+			}
+
+			// resize the image to a fixed size ?
+			if (true) {
+				int down_width = 1024;
+				int down_height = 768;
+
+				//resize down
+				resize(img_liveframe, img_liveframe, Size(down_width, down_height), INTER_LINEAR);
+			}
+			//flip(img_liveframe, img_liveframe, 1);
+		}
+
+		// KEYBOARD CONTROLS
+		//  1 : show training area
+		//  2 : show the features being tracked
+		// ' ': initiate initial training on that one area
+		{
+			char c = (char)waitKey(1);
+
+			if (c == 'a') {
+				keyboardTime -= 1000;
+			}
+			if (c == 's') {
+				keyboardTime += 1000;
+			}
+
+			// '1' - show the area where we will be training from
+			if (c == '1') {
+				gui_showTrainingArea = !gui_showTrainingArea;
+			}
+			if (gui_showTrainingArea) train_drawArea(img_liveframe, trainingArea, Scalar(0, 255, 0));;
+
+
+			// '2' - show all the features in the camera image
+			if (c == '2') {
+				gui_showAllCamFeatures = !gui_showAllCamFeatures;
+			}
+
+			/**
+			// '3' - show all the features in the camera image
+			if (c == '3') {
+				gui_showMatchedFeatures = !gui_showMatchedFeatures;
+			}
+			***/
+
+
+			// ' ' - trigger training of new dataset from that area
+			if (c == ' ') {
+				// show area
+				train_drawArea(img_liveframe, trainingArea, Scalar(255, 0, 0));
+
+				// take a subset of the image and grayscale it
+				Mat imgCroppedCamera = img_liveframe(trainingArea);
+				cvtColor(imgCroppedCamera, img_training, COLOR_RGB2GRAY);
+
+				// use it for training
+				processNewTrainingImage(img_training, siftdetector, fkeypoints_train, fdescriptors_train);
+
+				haveTrained = true;
+
+				// turn off training area
+				gui_showTrainingArea = false;
+			}
+
+			// show live , will be a bit later
+			//imshow("Live", img_liveframe);
+
+		}
+		// after training with ' ', the training image is in img_training, and the trained features are in fkeypoints_train and fdescriptors_train
+
+
+
+
+		// if we're using keyboard time, but we haven't changed the frame, don't do any processing
+		if ((keyboardTime) && (keyboardTime == lastProcessedTime)) {
+			continue;
+		}
+
+		lastProcessedTime = keyboardTime; // record this current time as the time we've just processed (pre-processing)
+
+
+
+		// NOW DO AR BASED ON THE TRAINING DATA VS. THE CAMERA IMAGE
+
+		
+
+		// 
+		// ===== DETECT FEATURES IN THE CAMERA FRAME ======= using SIFT
+		// 
+		// resulting features are in fkeypoints_cam and fdescriptors_cam
+
+		siftdetector->detectAndCompute(img_liveframe, noArray(), fkeypoints_cam, fdescriptors_cam);
+
+
+
+		// === SHOW THE IMAGE, AND ITS FEATURES ===
+		
+		// if yes, show all the features found in the camera frame, regardless of whether they're in the training or not
+		if (gui_showAllCamFeatures) {
+			cv::Mat output;
+			cv::drawKeypoints(img_liveframe, fkeypoints_cam, img_liveframe);//, cv::Scalar::all(-1), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+			//imshow("All features in camera", output);
+		}
+		
+		imshow("Live", img_liveframe);
+
+
+
+		//
+		// ===== MATCHING THE FEATURES ======= 
+		//
+
+		// if we didn't train any tracking image, then can't do anything now. 
+		if (!haveTrained)
+			continue;
+
+
+		knn_matches.clear();
+
+			// match the featuers from the camera and the training 
+			matcher->knnMatch(fdescriptors_cam, fdescriptors_train, knn_matches, 2);
+
+			// Filter only good enough matches
+			topMatches = filterFeatureMatches(knn_matches);
+
+			
+
+
+
+
+
+
+			// checkpoint to make sure we have enough match between the two images
+
+			// DO SOME STATS ON THE MATCHES
+			int num_good_matches = topMatches.size();
+			if (true) {
+				// do some extra stats on the matching
+				float avg_matchDist = 0;
+				for (size_t i = 0; i < num_good_matches; i++)
+				{
+					avg_matchDist += topMatches[i].distance;
+				}
+				avg_matchDist /= num_good_matches;
+
+				int deltaM = (lastNumMatchedFeatures - num_good_matches);
+				float deltaMP = (lastNumMatchedFeatures - num_good_matches) * 100.0f / num_good_matches;
+
+				cout << String("Matching: Good = ") << num_good_matches << "\t  Avg = " << avg_matchDist 
+					<< "\t  Delta = " << deltaM
+					<< "\t  DeltaPERC = " << deltaMP
+					<< endl;
+
+				bool stable = abs(deltaMP) < 20;
+				if (stable) {
+					cout << "**** STABLE ****" << endl;
+				}
+
+				bool lowPoints = num_good_matches < 10;
+				if (stable & lowPoints) {
+					cout << "************* [[ NOW ]] ********" << endl;
+
+					// retrain the image
+					train_drawArea(img_liveframe, trainingArea, Scalar(255, 0, 0));
+					Mat imgCroppedCamera = img_liveframe(trainingArea);
+					cvtColor(imgCroppedCamera, img_training, COLOR_RGB2GRAY);
+					processNewTrainingImage(img_training, siftdetector, fkeypoints_train, fdescriptors_train);
+					gui_showTrainingArea = false;
+					cout << "** RE-TRAINED **" << endl;
+					imshow("Live", img_liveframe);
+
+
+					imwrite(std::to_string(imagesSaved++) + ".jpg", img_liveframe);
+
+					lastNumMatchedFeatures = 500; 
+					continue;
+				}
+			}
+
+			bool skipBecauseLowMatch = false;
+			const int MINPOINTS = 100;
+			if (false && num_good_matches /*matchedpoints_cam.size()*/ < MINPOINTS) {
+
+				// retrain the image
+				train_drawArea(img_liveframe, trainingArea, Scalar(255, 0, 0));
+				Mat imgCroppedCamera = img_liveframe(trainingArea);
+				cvtColor(imgCroppedCamera, img_training, COLOR_RGB2GRAY);
+				processNewTrainingImage(img_training, siftdetector, fkeypoints_train, fdescriptors_train);
+				gui_showTrainingArea = false;
+				cout << "** RE-TRAINED **" << endl;
+				imshow("Live", img_liveframe);
+
+				skipBecauseLowMatch = true; // skip because too low
+			}
+
+			if (false && num_good_matches /**matchedpoints_cam.size()*/ > 200 && lastNumMatchedFeatures < 200) {
+				// this one is good for a screenshot
+				cout << "****** [[ GOOD ONE ]] ******" << endl;
+			}
+
+
+
+			lastNumMatchedFeatures = topMatches.size();//matchedpoints_cam.size();
+
+			if (skipBecauseLowMatch) continue;
+
+			
+
+
+			
+	}
+	// the camera will be deinitialized automatically in VideoCapture destructor
+	return 0;
+}
