@@ -1,3 +1,21 @@
+/******
+JOURNAL PAGE EXTRACTOR FROM VIDEO OF FLIPPING PAGES
+
+The way it's supopsed to work:
+- detect a clean page and train a set of keypoints on it
+- as the next frames go by, see if the next frames are of the same page or not (based on keypoints check)
+- if detected new page, save the old one and train on the new one
+
+
+CURRENT ISSUES
+- let's say you have two frames of the same page. the keypoints are totally off between them. 
+i tried changing the detectmatches from FLANN to BRUTEFORCE but the system just totally breaks [i think the knnMatcher gives bad results]
+
+
+
+
+*******/
+
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <chrono>
@@ -18,8 +36,11 @@ long getTimeMS() {
 // Detect SIFT features and compute descriptors
 void detectFeatures(const Mat& img, Ptr<SIFT>& detector,
     vector<KeyPoint>& keypoints, Mat& descriptors) {
-    keypoints.clear();
+
+    keypoints.clear(); 
     detector->detectAndCompute(img, noArray(), keypoints, descriptors);
+
+    cout << "DETECTED FEATURES num = " << to_string(keypoints.size());
 }
 
 // Filter KNN matches using Lowe's ratio test
@@ -139,8 +160,7 @@ bool areImagesSimilar(const vector<DMatch>& matches,
 // Main Program
 // =======================
 int main() {
-    cout << "WTF" << endl;
-
+   
     // Load video
     VideoCapture cap("..\\videos\\journaltest1.mp4");
     if (!cap.isOpened()) {
@@ -156,8 +176,8 @@ int main() {
     Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::FLANNBASED);
 
     // Training page descriptors
-    vector<KeyPoint> pageKeypoints;
-    Mat pageDescriptors;
+    vector<KeyPoint> trainedKeypoints;
+    Mat trainedDescriptors;
 
     // Variables for live frame
     vector<KeyPoint> camKeypoints;
@@ -180,8 +200,13 @@ int main() {
 
     cout << "Press SPACE to set initial page, 'a'/'s' to rewind/forward, '1'/'2' to toggle displays, ESC to quit." << endl;
 
+    Mat trainedPageImage;
+    Mat currentMatchedImage;
+
     vector<vector<DMatch>> knnMatches;
     vector<DMatch> goodMatches;
+
+
 
     // grab first frame
     grabFrame(cap, keyboardTime, frame);
@@ -201,12 +226,13 @@ int main() {
         if (key == '2') gui_showAllCamFeatures = !gui_showAllCamFeatures;
         if (key == 'd') imshow("Current", frame);
 
-        // ---- Set initial page ----
+        // ---- Train a page ----
         if (key == ' ') {
-            Mat pageImage = capturePageRegion(frame, pageRegion);
-            detectFeatures(pageImage, sift, pageKeypoints, pageDescriptors);
+            trainedPageImage = capturePageRegion(frame, pageRegion);
+            detectFeatures(trainedPageImage, sift, trainedKeypoints, trainedDescriptors);
             initialPageSet = true;
             lastNumMatches = 0;
+            lastProcessedTime = -1;
             cout << "** Initial page set **" << endl;
         }
 
@@ -220,37 +246,50 @@ int main() {
             continue;
         }
 
-        // ---- Feature detection and page change ----
+        // ---- Feature detection and page change check ----
         if (initialPageSet) {
             
             lastProcessedTime = keyboardTime;
             cout << lastProcessedTime << " ";
             
-            detectFeatures(frame, sift, camKeypoints, camDescriptors);
+            currentMatchedImage = capturePageRegion(frame, pageRegion);
+            detectFeatures(currentMatchedImage, sift, camKeypoints, camDescriptors);
+
+            
+            // Match features
+            
+            matcher->knnMatch(camDescriptors, trainedDescriptors, knnMatches, 2);
+            goodMatches = filterMatches(knnMatches, 0.5F);
+
 
             // Show all camera features if enabled
             if (gui_showAllCamFeatures) {
-                Mat output;
-                drawKeypoints(frame, camKeypoints, output, Scalar::all(-1), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
-                imshow("Camera Features", output);
+                //Mat output;
+                //drawKeypoints(pageImage, camKeypoints, output, Scalar::all(-1), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
+                //imshow("Camera Features", output);
+
+                Mat img_matches;
+                drawMatches(
+                    currentMatchedImage, camKeypoints,
+                    trainedPageImage, trainedKeypoints,
+                    goodMatches,
+                    img_matches, Scalar::all(-1),
+                    Scalar::all(-1), std::vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS);
+
+                imshow("Good Matches", img_matches);
+
             }
-
-            // Match features
-            
-            matcher->knnMatch(camDescriptors, pageDescriptors, knnMatches, 2);
-            goodMatches = filterMatches(knnMatches);
-
 
             // Analyze differences
 
             double avg, std;
-            areImagesSimilar(goodMatches, camKeypoints, pageKeypoints, avg, std);
+            areImagesSimilar(goodMatches, camKeypoints, trainedKeypoints, avg, std);
 
             int numGoodMatches = goodMatches.size();
             float deltaPerc = numGoodMatches ? (lastNumMatches - numGoodMatches) * 100.0f / numGoodMatches : 0;
 
             addStatusText(frame, 
-                "  pointsCam=" + to_string2(camKeypoints.size()) + "  pointsPage=" + to_string2(pageKeypoints.size()) +
+                "  pointsCam=" + to_string2(camKeypoints.size()) + "  pointsPage=" + to_string2(trainedKeypoints.size()) +
                 "  matches=" + to_string2(numGoodMatches) +
                 "  avgDist=" + to_string2(avg)+ "  std=" +to_string2(std) +
                 "  lastNM=" + to_string2(lastNumMatches) + "  deltaPerc=" + to_string2(deltaPerc));
@@ -264,7 +303,7 @@ int main() {
             if (false) {
                 if (stable && lowPoints) {
                     cout << "************* [[ NOW ]] ********" << endl;
-                    saveNewPage(frame, pageRegion, sift, pageKeypoints, pageDescriptors, imagesSaved);
+                    saveNewPage(frame, pageRegion, sift, trainedKeypoints, trainedDescriptors, imagesSaved);
                     lastNumMatches = 500; // reset after saving new page
                 }
                 else {
