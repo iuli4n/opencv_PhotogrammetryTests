@@ -1,0 +1,15 @@
+
+- this density histogram seems to work really well
+-- keep 0.7 as threshold ?
+
+- clean up performance:
+-- remove the extra drawing stuff
+-- remove the extra sum stats from main
+
+- add calculations for every new frame. when you see stability, take a new training image
+
+
+- do distance histograms and triangles
+
+
+

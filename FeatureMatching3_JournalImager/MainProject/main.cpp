@@ -20,6 +20,8 @@ i tried changing the detectmatches from FLANN to BRUTEFORCE but the system just 
 #include <iostream>
 #include <chrono>
 
+#include "image_checkers.cpp"
+
 using namespace cv;
 using namespace std;
 
@@ -33,8 +35,8 @@ long getTimeMS() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-// Detect SIFT features and compute descriptors
-void detectFeatures(const Mat& img, Ptr<SIFT>& detector,
+// Detect features and compute descriptors
+void detectFeatures(const Mat& img, Ptr<FeatureDetector>& detector,
     vector<KeyPoint>& keypoints, Mat& descriptors) {
 
     keypoints.clear(); 
@@ -47,7 +49,7 @@ void detectFeatures(const Mat& img, Ptr<SIFT>& detector,
 vector<DMatch> filterMatches(const vector<vector<DMatch>>& knn_matches, float ratio = 0.7f) {
     vector<DMatch> good_matches;
     for (const auto& m : knn_matches) {
-        if (m[0].distance < ratio * m[1].distance) {
+        if (m.size() >= 2 && m[0].distance < ratio * m[1].distance) {
             // if the best match (0) is way better than the second best (1) then this is a good overall match
             good_matches.push_back(m[0]);
         }
@@ -70,11 +72,11 @@ void drawPageArea(Mat& frame, const Rect& area, Scalar color) {
 
 // Save new page image and update descriptors
 void saveNewPage(const Mat& frame, const Rect& pageRegion,
-    Ptr<SIFT>& sift,
+    Ptr<FeatureDetector>& featureDetector,
     vector<KeyPoint>& pageKeypoints, Mat& pageDescriptors,
     int& imagesSaved) {
     Mat newPage = capturePageRegion(frame, pageRegion);
-    detectFeatures(newPage, sift, pageKeypoints, pageDescriptors);
+    detectFeatures(newPage, featureDetector, pageKeypoints, pageDescriptors);
     imwrite(to_string(imagesSaved++) + ".jpg", newPage);
     cout << "** New page detected and saved: " << imagesSaved - 1 << ".jpg **" << endl;
 }
@@ -171,9 +173,12 @@ int main() {
     // Define page region in the video
     Rect pageRegion(50, 50, 800, 700); // x, y, width, height
 
-    // Initialize SIFT detector and matcher
-    Ptr<SIFT> sift = SIFT::create();
-    Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::FLANNBASED);
+    // Initialize detector and matcher
+    //Ptr<FeatureDetector> featureDetector = SIFT::create();
+    //Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::FLANNBASED);
+
+    Ptr<FeatureDetector> featureDetector = ORB::create();
+    Ptr<DescriptorMatcher> matcher = BFMatcher::create(NORM_HAMMING2, false);
 
     // Training page descriptors
     vector<KeyPoint> trainedKeypoints;
@@ -229,7 +234,7 @@ int main() {
         // ---- Train a page ----
         if (key == ' ') {
             trainedPageImage = capturePageRegion(frame, pageRegion);
-            detectFeatures(trainedPageImage, sift, trainedKeypoints, trainedDescriptors);
+            detectFeatures(trainedPageImage, featureDetector, trainedKeypoints, trainedDescriptors);
             initialPageSet = true;
             lastNumMatches = 0;
             lastProcessedTime = -1;
@@ -253,20 +258,54 @@ int main() {
             cout << lastProcessedTime << " ";
             
             currentMatchedImage = capturePageRegion(frame, pageRegion);
-            detectFeatures(currentMatchedImage, sift, camKeypoints, camDescriptors);
+            detectFeatures(currentMatchedImage, featureDetector, camKeypoints, camDescriptors);
 
             
             // Match features
-            
+
+            cout << endl << "MATCHING... " << endl;
+            cout << "TRAIN type " << trainedDescriptors.type() << " size " << trainedDescriptors.size() << "  sum " << cv::sum(trainedDescriptors.row(0)) << std::endl;
+            cout << "CAM type " << camDescriptors.type() << " size " << camDescriptors.size() << "  sum " << cv::sum(camDescriptors.row(0)) << std::endl;
+
             matcher->knnMatch(camDescriptors, trainedDescriptors, knnMatches, 2);
             goodMatches = filterMatches(knnMatches, 0.5F);
+
+            // check the results
+            for (const auto& match : goodMatches) {
+                if (match.queryIdx >= camKeypoints.size()) {
+                    std::cerr << "Invalid match indices found! "
+                        << match.queryIdx << " >= keypoints size " << camKeypoints.size() << endl;
+                }
+                if (match.trainIdx >= trainedKeypoints.size()) {
+                    std::cerr << "Invalid match indices found! "
+                        << match.trainIdx << " >= trained size " << trainedKeypoints.size() << std::endl;
+                }
+
+            }
 
 
             // Show all camera features if enabled
             if (gui_showAllCamFeatures) {
+                cv::Mat img1_with_kp, img2_with_kp;
+
+                // Draw keypoints on each image separately
+                cv::drawKeypoints(currentMatchedImage, camKeypoints, img1_with_kp, cv::Scalar::all(-1),
+                    cv::DrawMatchesFlags::DEFAULT);
+                cv::drawKeypoints(trainedPageImage, trainedKeypoints, img2_with_kp, cv::Scalar::all(-1),
+                    cv::DrawMatchesFlags::DEFAULT);
+
+                cv::Mat combined;
+                cv::hconcat(img1_with_kp, img2_with_kp, combined);
+                cv::imshow("Keypoints", combined);
+            
+                ImageChecker* checker = new ImageChecker_DensityGrid();
+                checker->compareKeypointStats(camKeypoints, trainedKeypoints, &currentMatchedImage, &trainedPageImage);
+            }
+            if (false) { //gui_showAllCamFeatures) {
                 //Mat output;
                 //drawKeypoints(pageImage, camKeypoints, output, Scalar::all(-1), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
                 //imshow("Camera Features", output);
+
 
                 Mat img_matches;
                 drawMatches(
@@ -303,7 +342,7 @@ int main() {
             if (false) {
                 if (stable && lowPoints) {
                     cout << "************* [[ NOW ]] ********" << endl;
-                    saveNewPage(frame, pageRegion, sift, trainedKeypoints, trainedDescriptors, imagesSaved);
+                    saveNewPage(frame, pageRegion, featureDetector, trainedKeypoints, trainedDescriptors, imagesSaved);
                     lastNumMatches = 500; // reset after saving new page
                 }
                 else {
