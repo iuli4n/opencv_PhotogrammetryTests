@@ -1,15 +1,26 @@
 
-- this density histogram seems to work really well
--- keep 0.7 as threshold ?
+- before saving a new page, wait to stabilize the image 
+-- save a draft when you detect new page, and then wait a fixed time (ensuring same page) before saving
 
-- clean up performance:
--- remove the extra drawing stuff
--- remove the extra sum stats from main
-
-- add calculations for every new frame. when you see stability, take a new training image
+- put saved images in a folder
+- delete folder every time you restart
 
 
-- do distance histograms and triangles
+Clean up performance:
+-- try faster detectors (ex: FAST; but will need to clip the # of features found)
 
+Cooler matching of pages:
+-- do distance histograms and triangles
+
+
+Bugs
+- if using fast framerate (<500 ms between frames), it sometimes false detects. you can use the time of interruption to filter this out
+
+Check cases:
+- we save the frame that's one after the page stabilizes; but if the framerate is too high this might be blurry
+
+Edge cases:
+- frames that contain no features
+- starts with blank frame that contains no features
 
 

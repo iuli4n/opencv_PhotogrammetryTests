@@ -10,7 +10,7 @@ public:
     
     //virtual void computeKeypointStats(const vector<KeyPoint>& kps) const = 0;
     //virtual void compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2) const = 0;
-    virtual void compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2, const cv::Mat* img1 = nullptr, const cv::Mat* img2 = nullptr) const = 0;
+    virtual bool compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2, const cv::Mat* img1 = nullptr, const cv::Mat* img2 = nullptr) const = 0;
 
     virtual ~ImageChecker() = default; // Always good practice in polymorphic base classes
 };
@@ -42,7 +42,7 @@ public:
         return { Point2f(meanX[0], meanY[0]), Point2f(stdX[0], stdY[0]) };
     }
 
-    void compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2, const cv::Mat* img1 = nullptr, const cv::Mat* img2 = nullptr) const override {
+    bool compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2, const cv::Mat* img1 = nullptr, const cv::Mat* img2 = nullptr) const override {
         KeypointStats s1 = computeKeypointStats(kp1);
         KeypointStats s2 = computeKeypointStats(kp2);
 
@@ -57,10 +57,8 @@ public:
         cout << "Centroid distance: " << centroidDist << " pixels\n";
         cout << "Spread difference: " << spreadDiff << " pixels\n";
 
-        if (centroidDist < 30 && spreadDiff < 15)
-            cout << "-> Likely same page.\n";
-        else
-            cout << "-> Likely different page.\n";
+        bool samePage = (centroidDist < 30 && spreadDiff < 15);
+        return samePage;
     }
 };
 
@@ -102,7 +100,7 @@ public:
     }
 
 
-    void compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2, const cv::Mat* img1 = nullptr, const cv::Mat* img2 = nullptr) const override {
+    bool compareKeypointStats(const vector<KeyPoint>& kp1, const vector<KeyPoint>& kp2, const cv::Mat* img1 = nullptr, const cv::Mat* img2 = nullptr) const override {
 
         // Compute grid histograms
         int gridSize = 10;
@@ -120,12 +118,10 @@ public:
         // double chi2 = compareHist(h1, h2, HISTCMP_CHISQR);
 
         cout << "Cosine similarity: " << cosineSim << endl;
+        
+        bool samePage = cosineSim > 0.7f;
 
-        if (cosineSim > 0.7f)
-            cout << "-> Likely same page.\n";
-        else
-            cout << "-> Likely different page.\n";
-
+        
 
         // Optional: visualize histograms as heatmaps
         Mat vis1, vis2;
@@ -137,6 +133,8 @@ public:
         resize(vis2, vis2, Size(100, 100));
         imshow("Density1", vis1);
         imshow("Density2", vis2);
+        
+        return samePage;
     }
 };
 

@@ -6,7 +6,15 @@ The way it's supopsed to work:
 - as the next frames go by, see if the next frames are of the same page or not (based on keypoints check)
 - if detected new page, save the old one and train on the new one
 
-***/
+
+CURRENT ISSUES
+- let's say you have two frames of the same page. the keypoints are totally off between them. 
+i tried changing the detectmatches from FLANN to BRUTEFORCE but the system just totally breaks [i think the knnMatcher gives bad results]
+
+
+
+
+*******/
 
 #include <opencv2/opencv.hpp>
 #include <iostream>
@@ -27,38 +35,14 @@ long getTimeMS() {
     return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
-
-// Crop and convert page region to grayscale
-Mat capturePageRegion(const Mat& frame, const Rect& area) {
-    Mat cropped = frame(area);//.clone();
-    Mat gray;
-    cvtColor(cropped, gray, COLOR_RGB2GRAY);
-    return gray;
-}
-
-
 // Detect features and compute descriptors
-void detectFeatures(
-    const Mat& img, Ptr<FeatureDetector>& detector,
+void detectFeatures(const Mat& img, Ptr<FeatureDetector>& detector,
     vector<KeyPoint>& keypoints, Mat& descriptors) {
 
     keypoints.clear(); 
-    detector->detect(img, keypoints);
-
-    //detector->detectAndCompute(img, noArray(), keypoints, descriptors);
+    detector->detectAndCompute(img, noArray(), keypoints, descriptors);
 
     cout << "DETECTED FEATURES num = " << to_string(keypoints.size());
-}
-
-void trainOnCurrentFrame(
-    Mat& trainedPageImage,
-    const Mat& frame, Rect& pageRegion, 
-    Ptr<FeatureDetector>& featureDetector,
-    vector<KeyPoint>& trainedKeypoints, Mat& trainedDescriptors) {
-    
-    cout << endl << "TRAINING" << endl;
-    trainedPageImage = capturePageRegion(frame, pageRegion);
-    detectFeatures(trainedPageImage, featureDetector, trainedKeypoints, trainedDescriptors);
 }
 
 // Filter KNN matches using Lowe's ratio test
@@ -71,6 +55,14 @@ vector<DMatch> filterMatches(const vector<vector<DMatch>>& knn_matches, float ra
         }
     }
     return good_matches;
+}
+
+// Crop and convert page region to grayscale
+Mat capturePageRegion(const Mat& frame, const Rect& area) {
+    Mat cropped = frame(area);//.clone();
+    Mat gray;
+    cvtColor(cropped, gray, COLOR_RGB2GRAY);
+    return gray;
 }
 
 // Draw rectangle around page region
@@ -185,18 +177,8 @@ int main() {
     //Ptr<FeatureDetector> featureDetector = SIFT::create();
     //Ptr<DescriptorMatcher> matcher = DescriptorMatcher::create(DescriptorMatcher::FLANNBASED);
 
-    /**
-    // Create a FAST detector
-    // Arguments: threshold, nonmaxSuppression, type
-    Ptr<FeatureDetector> featureDetector = FastFeatureDetector::create(
-        25,                 // intensity threshold
-        true,               // enable nonmax suppression (recommended)
-        FastFeatureDetector::TYPE_9_16  // circle of 16 pixels, using 9 for test
-    );
-    **/
-
     Ptr<FeatureDetector> featureDetector = ORB::create();
-    //Ptr<DescriptorMatcher> matcher = BFMatcher::create(NORM_HAMMING2, false);
+    Ptr<DescriptorMatcher> matcher = BFMatcher::create(NORM_HAMMING2, false);
 
     // Training page descriptors
     vector<KeyPoint> trainedKeypoints;
@@ -214,19 +196,12 @@ int main() {
     // Page training / state
     bool initialPageSet = false;
     int imagesSaved = 0;
-    //int lastNumMatches = 0;
+    int lastNumMatches = 0;
 
-    
-    // TIMING 
-
-    bool autoForward = true; // if true, will not wait for keys
-    
-    const int skipTime = 500; // ms between frames to skip
-    long videoTime = 0; // initial start time; and then used to track current time
-    //long startTime = getTimeMS();
+    // Keyboard time simulation
+    long keyboardTime = 1000;
+    long startTime = getTimeMS();
     long lastProcessedTime = -1;
-
-
 
     cout << "Press SPACE to set initial page, 'a'/'s' to rewind/forward, '1'/'2' to toggle displays, ESC to quit." << endl;
 
@@ -237,22 +212,20 @@ int main() {
     vector<DMatch> goodMatches;
 
 
-    bool firstFrame = true;
-    bool lastFrameWasSameAsPrev = false;
 
     // grab first frame
-    grabFrame(cap, videoTime, frame);
+    grabFrame(cap, keyboardTime, frame);
 
     while (true) {
         
         
+
         // ---- Handle keyboard input ----
-        char key = (char)waitKey(autoForward ? 1 : 10);
+        char key = (char)waitKey(10);
         if (key == 27) break; // ESC
-        if (autoForward || key == 's') {
-            videoTime += skipTime; if (!grabFrame(cap, videoTime, frame)) break;
+        if (key == 'a') { keyboardTime -= 1000; if (!grabFrame(cap, keyboardTime, frame)) break; 
         }
-        if (key == 'a') { videoTime -= skipTime; if (!grabFrame(cap, videoTime, frame)) break;
+        if (key == 's') { keyboardTime += 1000; if (!grabFrame(cap, keyboardTime, frame)) break; 
         }
         if (key == '1') gui_showPageArea = !gui_showPageArea;
         if (key == '2') gui_showAllCamFeatures = !gui_showAllCamFeatures;
@@ -260,7 +233,10 @@ int main() {
 
         // ---- Train a page ----
         if (key == ' ') {
-            trainOnCurrentFrame(trainedPageImage, frame, pageRegion, featureDetector, trainedKeypoints, trainedDescriptors);
+            trainedPageImage = capturePageRegion(frame, pageRegion);
+            detectFeatures(trainedPageImage, featureDetector, trainedKeypoints, trainedDescriptors);
+            initialPageSet = true;
+            lastNumMatches = 0;
             lastProcessedTime = -1;
             cout << "** Initial page set **" << endl;
         }
@@ -269,18 +245,16 @@ int main() {
         if (gui_showPageArea) drawPageArea(frame, pageRegion, Scalar(0, 255, 0));
 
         
-        if (lastProcessedTime == videoTime) {
+        if (lastProcessedTime == keyboardTime) {
             // we didn't move the time, so do nothing
             //imshow("Journal", frame);
             continue;
         }
 
-
-        
         // ---- Feature detection and page change check ----
-        if (true) {
+        if (initialPageSet) {
             
-            lastProcessedTime = videoTime;
+            lastProcessedTime = keyboardTime;
             cout << lastProcessedTime << " ";
             
             currentMatchedImage = capturePageRegion(frame, pageRegion);
@@ -291,6 +265,26 @@ int main() {
 
             cout << endl << "MATCHING... " << endl;
             
+            /****** OLD VERSION 
+            cout << "TRAIN type " << trainedDescriptors.type() << " size " << trainedDescriptors.size() << "  sum " << cv::sum(trainedDescriptors.row(0)) << std::endl;
+            cout << "CAM type " << camDescriptors.type() << " size " << camDescriptors.size() << "  sum " << cv::sum(camDescriptors.row(0)) << std::endl;
+
+            matcher->knnMatch(camDescriptors, trainedDescriptors, knnMatches, 2);
+            goodMatches = filterMatches(knnMatches, 0.5F);
+
+            // check the results
+            for (const auto& match : goodMatches) {
+                if (match.queryIdx >= camKeypoints.size()) {
+                    std::cerr << "Invalid match indices found! "
+                        << match.queryIdx << " >= keypoints size " << camKeypoints.size() << endl;
+                }
+                if (match.trainIdx >= trainedKeypoints.size()) {
+                    std::cerr << "Invalid match indices found! "
+                        << match.trainIdx << " >= trained size " << trainedKeypoints.size() << std::endl;
+                }
+
+            }
+            *******/
 
             // Show all camera features if enabled
             if (gui_showAllCamFeatures) {
@@ -306,7 +300,7 @@ int main() {
                 cv::hconcat(img1_with_kp, img2_with_kp, combined);
                 cv::imshow("Keypoints", combined);
             
-            } 
+            }
             if (false) { //gui_showAllCamFeatures) {
                 //Mat output;
                 //drawKeypoints(pageImage, camKeypoints, output, Scalar::all(-1), DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
@@ -328,60 +322,40 @@ int main() {
             // Analyze differences
 
             ImageChecker* checker = new ImageChecker_DensityGrid();
-            bool isSamePage = checker->compareKeypointStats(camKeypoints, trainedKeypoints, &currentMatchedImage, &trainedPageImage);
+            checker->compareKeypointStats(camKeypoints, trainedKeypoints, &currentMatchedImage, &trainedPageImage);
 
-            if (isSamePage) {
-                cout << "-> Likely same page.\n";
+            /*** OLD STUFF using keypoints matching
+            * 
+            double avg, std;
+            areImagesSimilar(goodMatches, camKeypoints, trainedKeypoints, avg, std);
+
+            int numGoodMatches = goodMatches.size();
+            float deltaPerc = numGoodMatches ? (lastNumMatches - numGoodMatches) * 100.0f / numGoodMatches : 0;
+
+            addStatusText(frame, 
+                "  pointsCam=" + to_string2(camKeypoints.size()) + "  pointsPage=" + to_string2(trainedKeypoints.size()) +
+                "  matches=" + to_string2(numGoodMatches) +
+                "  avgDist=" + to_string2(avg)+ "  std=" +to_string2(std) +
+                "  lastNM=" + to_string2(lastNumMatches) + "  deltaPerc=" + to_string2(deltaPerc));
+
+            // Check stability and low match count for page change
+            bool stable = abs(deltaPerc) < 20;
+            bool lowPoints = numGoodMatches < 10;
+
+            cout << "checked" << endl;
+
+            if (false) {
+                if (stable && lowPoints) {
+                    cout << "************* [[ NOW ]] ********" << endl;
+                    saveNewPage(frame, pageRegion, featureDetector, trainedKeypoints, trainedDescriptors, imagesSaved);
+                    lastNumMatches = 500; // reset after saving new page
+                }
+                else {
+                    lastNumMatches = numGoodMatches;
+                }
             }
-            else {
-                cout << "-> Likely different page.\n";
-            }
-            
-            if (!isSamePage) drawPageArea(frame, pageRegion, Scalar(255, 0, 0));
-
-
-
-            // Now smartly track what we've been seeing
-
-            cout << "isSamePage:" << isSamePage << " lastSameAsPrev:" << lastFrameWasSameAsPrev << " FF:" << firstFrame << endl;
-
-            if ((firstFrame) ||
-                (isSamePage && !lastFrameWasSameAsPrev)) {
-
-                // we've just stabilized on a new page:
-                // is same as the previous frame, but we've been in a period of unmatched pages
-                
-                // retrain on this because it's usually more stable
-                trainOnCurrentFrame(trainedPageImage, frame, pageRegion, featureDetector, trainedKeypoints, trainedDescriptors);
-                lastProcessedTime = videoTime;
-                
-                // TODO: SAVE IT BECAUSE THIS IS GOOD
-                cout << endl << "-------------- GOOD PAGE ------------------" << endl;
-                cout << "-------------- GOOD PAGE ------------------" << endl;
-                
-                imwrite(std::to_string(imagesSaved++) + ".jpg", frame);
-
-
-                drawPageArea(frame, pageRegion, Scalar(0, 0, 255));
-
-                isSamePage = true; // set it so we skip through the next if statement
-            }
-
-           
-            if (isSamePage) {
-                lastFrameWasSameAsPrev = true;
-
-            }
-            else {
-                // we're going to train on this so we can see when it becomes stable
-                trainOnCurrentFrame(trainedPageImage, frame, pageRegion, featureDetector, trainedKeypoints, trainedDescriptors);
-                lastProcessedTime = videoTime;
-
-                lastFrameWasSameAsPrev = false;
-            }
+            ****/
         }
-
-        firstFrame = false;
 
         // ---- Show live video ----
         imshow("Journal3", frame);

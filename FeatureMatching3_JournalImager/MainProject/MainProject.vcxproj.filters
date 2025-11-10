@@ -35,6 +35,10 @@
     <Text Include="main_cleanedV1.cpp.txt">
       <Filter>Source Files</Filter>
     </Text>
+    <Text Include="TODOS.txt" />
+    <Text Include="main_oldWithMatchingCodeCommented.cpp.txt">
+      <Filter>Source Files</Filter>
+    </Text>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="main.h">
