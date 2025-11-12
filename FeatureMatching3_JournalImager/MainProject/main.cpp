@@ -108,8 +108,8 @@ void addStatusText(Mat& frame, String appendText) {
 
 // Grab the next frame at the current keyboardTime
 // Returns false if the frame is empty (end of video), true otherwise
-bool grabFrame(VideoCapture& cap, long keyboardTime, Mat& frame, int width = 1024, int height = 768) {
-    long msecsNow = keyboardTime;
+bool grabFrame(VideoCapture& cap, long videoTime, Mat& frame, int width = 1024, int height = 768) {
+    long msecsNow = videoTime;
     cap.set(CAP_PROP_POS_MSEC, msecsNow);
     cout << msecsNow << "::";
 

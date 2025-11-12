@@ -1,16 +1,21 @@
 
+- clean up output
+
 - before saving a new page, wait to stabilize the image 
--- save a draft when you detect new page, and then wait a fixed time (ensuring same page) before saving
+-- save a draft when you detect new page, and then wait a fixed time (ensuring same page stays) before saving; if page changed, save the draft
+->> actually try this: for saving pages, seek into the file separately and get the HD image. Now, as a hack add +0.5s before you get the image
 
 - put saved images in a folder
-- delete folder every time you restart
+-- delete folder every time you restart
 
 
-Clean up performance:
--- try faster detectors (ex: FAST; but will need to clip the # of features found)
+Bonus:
+	- Clean up performance:
+	-- try faster detectors (ex: FAST; but will need to clip the # of features found)
 
-Cooler matching of pages:
--- do distance histograms and triangles
+	- Cooler matching of pages:
+	-- do distance histograms and triangles
+
 
 
 Bugs
